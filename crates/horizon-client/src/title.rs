@@ -134,6 +134,7 @@ pub enum Action {
     },
     Connect {
         address: String,
+        target_version: Option<String>,
     },
 }
 pub struct Title {
@@ -1364,7 +1365,13 @@ impl Title {
                     self.mode = Mode::Main;
                     Action::None
                 }
-                crate::multiplayer::Outcome::Connect(address) => Action::Connect { address },
+                crate::multiplayer::Outcome::Connect {
+                    address,
+                    target_version,
+                } => Action::Connect {
+                    address,
+                    target_version,
+                },
                 crate::multiplayer::Outcome::None => Action::None,
             },
             (Mode::Main, Some(5)) => {

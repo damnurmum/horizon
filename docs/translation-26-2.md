@@ -1,0 +1,13 @@
+# Java Edition 26.2 packet translation
+
+Horizon uses Java Edition 26.3 resources and protocol 777. The `version-bridge` mod translates a remote connection to Java Edition 26.2 (protocol 776). It uses the experimental `network` mod capability: a separate WebAssembly instance sees complete packet bodies after decryption and decompression, and may replace or drop them before Horizon's packet codecs run. The mod must be installed and enabled to join a 26.2 server.
+
+Build the mod from `crates/horizon-mod-sdk/examples/version-bridge` with `cargo horizon-mod build`, then install and enable its `.hmod`. In Multiplayer, add or edit a server and set **Server Version** to **26.2**. The selected version is saved in `servers.dat`. For a direct launch, pass `--target-version 26.2 --server HOST:PORT`. For local development, pass `--dev-mod PATH/TO/version_bridge.hmod` instead of installing it. A signed-in session is still needed for servers that require online authentication.
+
+The server list currently sends its status ping without the mod translator. A 26.2 server may show an incompatible version or fail to show its status even when joining through the mod works.
+
+The adapter converts the handshake, packet IDs in every connection phase, teleport acknowledgements, swings and player actions such as dropping items. In play it translates changed spawn and entity movement packets, entity metadata (including dropped item stacks), chunk light masks and block palettes, block updates, block entities, items and their component IDs, entity and particle types, sound events, explosions, recipe book entries and advancements. Numeric registry maps come from the two vanilla versions' local datagen reports via `tools/generate_registry_maps.py`; the reports and game jars stay outside the repository.
+
+The implementation has been exercised against a local vanilla 26.2 server: login, chunk loading, movement, inventory updates, mobs, block entities, recipes, advancements and TNT explosions decoded, and the client completed a 10,000-frame play run without skipped packets. The `network` API and this adapter remain experimental. Payloads not covered by these tests may still differ, especially nested item or particle data and packets from servers with plugins. A 26.3-only item cannot be sent to a 26.2 server because that server has no corresponding registry entry.
+
+`horizon-protocol::connection::PacketTranslator` is the Rust interface. `horizon-client::net::Session::connect_translated`, `connect_transferred_translated` and `ping_translated` attach it to remote and status connections. The normal 26.3 path has no translator.

@@ -124,7 +124,7 @@ impl Game<'_> {
     /// (the launcher's session file is gone after the first read).
     pub(super) fn extras_retry(&mut self) -> horizon_client::Result<()> {
         if let Some(retry) = self.title.as_mut().and_then(|t| t.due_retry()) {
-            self.connect_server(&retry.address, &retry.name)?;
+            self.connect_server_with_cookies(&retry.address, &retry.name, None)?;
         }
         Ok(())
     }

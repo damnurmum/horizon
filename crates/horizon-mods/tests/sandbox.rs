@@ -50,6 +50,8 @@ fn mods_dir() -> &'static Path {
                 "-p",
                 "beacons",
                 "-p",
+                "version-bridge",
+                "-p",
                 "horizon-mods-test-guest",
                 "-p",
                 "horizon-mods-test-ui-guest",
@@ -74,6 +76,7 @@ fn mods_dir() -> &'static Path {
             ("predator_missile", example("predator-missile")),
             ("welcome", example("welcome")),
             ("beacons", example("beacons")),
+            ("version_bridge", example("version-bridge")),
             ("horizon_mods_test_guest", GUEST_MANIFEST.to_string()),
             ("horizon_mods_test_ui_guest", UI_MANIFEST.to_string()),
         ];
@@ -132,6 +135,137 @@ fn network_hook_selects_versions_and_keeps_connection_state() {
             .unwrap(),
         vec![vec![3]]
     );
+}
+
+#[test]
+fn network_mod_translates_a_handshake_in_its_own_instance() {
+    use horizon_protocol::{
+        Direction, State,
+        buf::Reader,
+        packets::handshake::{self, Serverbound},
+    };
+    let mut mods = load("version_bridge.hmod");
+    assert_eq!(mods.entries()[0].status, Status::Running);
+    assert!(
+        mods.network_translator("localhost:25565", None)
+            .unwrap()
+            .is_none()
+    );
+    let translator = mods
+        .network_translator("localhost:25565", Some("26.2"))
+        .unwrap()
+        .expect("the mod selected 26.2");
+    let original = Serverbound::Intention(handshake::Intention {
+        protocol: horizon_protocol::PROTOCOL_VERSION,
+        host: "localhost".into(),
+        port: 25565,
+        intent: handshake::LOGIN,
+    })
+    .encode();
+    let packets = translator
+        .translate(State::Handshake, Direction::Serverbound, &original)
+        .unwrap();
+    assert_eq!(packets.len(), 1);
+    let mut reader = Reader::new(&packets[0]);
+    let id = reader.varint().unwrap();
+    let Serverbound::Intention(packet) = Serverbound::decode(id, reader.rest()).unwrap() else {
+        panic!("expected handshake");
+    };
+    assert_eq!(packet.protocol, 776);
+    assert_eq!(packet.host, "localhost");
+}
+
+#[test]
+fn network_mod_translates_a_large_packet_with_bounded_fuel() {
+    use horizon_protocol::{
+        Direction, State,
+        buf::{Reader, Writer},
+    };
+    let mut mods = load("version_bridge.hmod");
+    let translator = mods
+        .network_translator("localhost:25565", Some("26.2"))
+        .unwrap()
+        .expect("the mod selected 26.2");
+    let mut packet = Writer::new();
+    packet.varint(1); // 26.2 configuration clientbound custom_payload
+    packet.data.extend(std::iter::repeat_n(0x5a, 2 << 20));
+    let output = translator
+        .translate(State::Configuration, Direction::Clientbound, &packet.data)
+        .unwrap();
+    assert_eq!(output.len(), 1);
+    let mut reader = Reader::new(&output[0]);
+    assert_eq!(
+        horizon_protocol::ids::name(
+            State::Configuration,
+            Direction::Clientbound,
+            reader.varint().unwrap()
+        ),
+        Some("custom_payload")
+    );
+    assert_eq!(reader.rest(), &packet.data[1..]);
+}
+
+#[test]
+fn version_bridge_drops_items_and_decodes_their_metadata() {
+    use horizon_protocol::{
+        Direction, State,
+        buf::{Reader, Writer},
+        entity_data::{Value, serializer},
+        packets::play::{self, PlayerAction},
+    };
+    // A separate build lets local runs exercise a newly packaged mod without
+    // replacing the file watched by an already running game.
+    let package = std::env::var_os("HORIZON_VERSION_BRIDGE_TEST_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| mods_dir().join("version_bridge.hmod"));
+    let mut mods = Mods::load(&[package], |_| true, |_| false);
+    assert_eq!(mods.entries()[0].status, Status::Running);
+    let translator = mods
+        .network_translator("localhost:25565", Some("26.2"))
+        .unwrap()
+        .expect("the mod selected 26.2");
+
+    let drop = play::Serverbound::PlayerAction(PlayerAction {
+        action: 5, // 26.3 DROP_ITEM
+        pos: [0; 3],
+        direction: 0,
+        sequence: 0,
+    })
+    .encode();
+    let packets = translator
+        .translate(State::Play, Direction::Serverbound, &drop)
+        .unwrap();
+    assert_eq!(packets.len(), 1);
+    let mut reader = Reader::new(&packets[0]);
+    reader.varint().unwrap(); // 26.2 player_action packet ID
+    assert_eq!(reader.varint().unwrap(), 4); // 26.2 DROP_ITEM
+
+    let mut old = Writer::new();
+    old.varint(99); // 26.2 clientbound set_entity_data packet ID
+    old.varint(123); // entity ID
+    old.u8(8); // ItemEntity.DATA_ITEM
+    old.varint(serializer::ITEM_STACK);
+    old.varint(1); // count
+    old.varint(72); // 26.2 item registry ID
+    old.varint(0); // added components
+    old.varint(0); // removed components
+    old.u8(0xff);
+    let packets = translator
+        .translate(State::Play, Direction::Clientbound, &old.data)
+        .unwrap();
+    assert_eq!(packets.len(), 1);
+    let mut reader = Reader::new(&packets[0]);
+    let id = reader.varint().unwrap();
+    let play::Clientbound::SetEntityData(data) =
+        play::Clientbound::decode(id, reader.rest()).unwrap()
+    else {
+        panic!("expected entity data");
+    };
+    assert_eq!(data.id, 123);
+    assert!(matches!(
+        &data.values[..],
+        [(8, serializer::ITEM_STACK, Value::Item(Some(stack)))] if stack.item == 73
+    ));
 }
 
 fn player() -> Snapshot {

@@ -1430,6 +1430,8 @@ struct Game<'a> {
     /// The detail revision, centre and radius `Lod::update` last had covered for.
     lod_covered_at: Option<(u64, (i32, i32), i32)>,
     options: Options,
+    /// Adapter selected for the current remote connection.
+    active_target_version: Option<String>,
     player: Option<PlayerMotion>,
     spawn: Option<Vec3>,
     clock: FixedStep,
@@ -12947,9 +12949,14 @@ impl ApplicationHandler for Game<'_> {
                         } => {
                             self.open_world(&folder, Some(&name), seed, creative, Some(&options))?
                         }
-                        Action::Connect { address } => {
-                            self.connect_server(&address, &self.options.player_name())?
-                        }
+                        Action::Connect {
+                            address,
+                            target_version,
+                        } => self.connect_server_version(
+                            &address,
+                            &self.options.player_name(),
+                            target_version,
+                        )?,
                         Action::None => {}
                     }
                 }
@@ -13619,6 +13626,7 @@ impl<'a> Game<'a> {
         audio: Audio,
         prepared: Option<GameCpuResources>,
     ) -> Result<Self> {
+        let active_target_version = options.target_version.clone();
         let root = options.resources.clone();
         let registry = pack.assets.registry;
         // Until a world is opened the streamer is idle.
@@ -13672,6 +13680,7 @@ impl<'a> Game<'a> {
             lod_observe: Default::default(),
             lod_covered_at: None,
             options,
+            active_target_version,
             player: None,
             spawn: None,
             clock: FixedStep::default(),
@@ -14084,6 +14093,7 @@ enum PendingWorldEntry {
     Server {
         address: String,
         name: String,
+        target_version: Option<String>,
         /// A transfer's carried-over server cookies (`TransferState`).
         cookies: Option<horizon_client::net::Cookies>,
     },
@@ -14174,8 +14184,11 @@ impl Game<'_> {
             Some(PendingWorldEntry::Server {
                 address,
                 name,
+                target_version,
                 cookies,
             }) => {
+                self.active_target_version =
+                    target_version.or_else(|| self.options.target_version.clone());
                 self.connect_server_with_cookies(&address, &name, cookies)?;
             }
             None => {}

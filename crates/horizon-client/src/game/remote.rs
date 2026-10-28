@@ -293,6 +293,16 @@ impl Game<'_> {
     }
     /// Leave the title for a server (ConnectScreen): an empty world fed by the connection.
     pub(super) fn connect_server(&mut self, address: &str, name: &str) -> Result<()> {
+        self.active_target_version = self.options.target_version.clone();
+        self.connect_server_with_cookies(address, name, None)
+    }
+    pub(super) fn connect_server_version(
+        &mut self,
+        address: &str,
+        name: &str,
+        version: Option<String>,
+    ) -> Result<()> {
+        self.active_target_version = version.or_else(|| self.options.target_version.clone());
         self.connect_server_with_cookies(address, name, None)
     }
     /// `connect_server` carrying a transfer's stored server cookies
@@ -306,6 +316,7 @@ impl Game<'_> {
         if self.defer_world_entry(super::PendingWorldEntry::Server {
             address: address.to_owned(),
             name: name.to_owned(),
+            target_version: self.active_target_version.clone(),
             cookies: cookies.clone(),
         })? {
             return Ok(());
@@ -375,7 +386,7 @@ impl Game<'_> {
                 let translator = self
                     .mods
                     .mods
-                    .network_translator(address, self.options.target_version.as_deref())?;
+                    .network_translator(address, self.active_target_version.as_deref())?;
                 #[cfg(not(feature = "mods"))]
                 let translator: Option<
                     Arc<dyn horizon_protocol::connection::PacketTranslator>,

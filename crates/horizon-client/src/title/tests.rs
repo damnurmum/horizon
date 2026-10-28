@@ -107,6 +107,7 @@ fn direct_connection_remembers_the_address_on_cancel_escape_and_join() {
         f.click("Join Server"),
         Action::Connect {
             address: "localhost:25569".into(),
+            target_version: None,
         }
     );
     assert_eq!(f.title.last_server, "localhost:25569");
@@ -838,6 +839,7 @@ fn server_fields_edit_at_their_cursor() {
         address: String::new(),
         focus: 1,
         packs: None,
+        target_version: None,
     });
     f.title.type_text("localhost");
     for _ in 0..4 {

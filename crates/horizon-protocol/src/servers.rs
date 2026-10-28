@@ -11,6 +11,8 @@ pub struct ServerEntry {
     pub icon: Option<String>,
     /// ServerPackStatus: None = prompt, Some(true) enabled, Some(false) disabled.
     pub accept_textures: Option<bool>,
+    /// Horizon's selected protocol adapter for this server (vanilla ignores it).
+    pub target_version: Option<String>,
 }
 impl ServerEntry {
     pub fn new(name: &str, ip: &str) -> Self {
@@ -19,6 +21,7 @@ impl ServerEntry {
             ip: ip.to_owned(),
             icon: None,
             accept_textures: None,
+            target_version: None,
         }
     }
     fn to_tag(&self) -> Tag {
@@ -31,6 +34,12 @@ impl ServerEntry {
         }
         if let Some(accept) = self.accept_textures {
             entries.push(("acceptTextures", Tag::Byte(i8::from(accept))));
+        }
+        if let Some(version) = &self.target_version {
+            entries.push((
+                "horizonTargetVersion",
+                Tag::String(JavaString::from(version.as_str())),
+            ));
         }
         Tag::compound(entries)
     }
@@ -47,6 +56,7 @@ impl ServerEntry {
                 Some(Tag::Byte(b)) => Some(*b != 0),
                 _ => None,
             },
+            target_version: string("horizonTargetVersion"),
         })
     }
 }
@@ -119,6 +129,7 @@ mod tests {
             ServerEntry::new("Minecraft Server", "localhost:25565"),
             ServerEntry {
                 accept_textures: Some(false),
+                target_version: Some("26.2".into()),
                 ..ServerEntry::new("Other", "example.org")
             },
         ];

@@ -172,6 +172,11 @@ pub enum PositionSource {
 impl Particle {
     pub fn read(r: &mut Reader) -> Result<Particle> {
         let id = r.varint()?;
+        Self::read_with_id(id, r)
+    }
+    /// Decode a particle payload after its registry id has been read or
+    /// translated by a version adapter.
+    pub(crate) fn read_with_id(id: i32, r: &mut Reader) -> Result<Particle> {
         // `minecraft:particle_type` registry order as of 26.3.
         let data = match id {
             1 | 2 | 36 | 121 | 125 => Some(ParticleData::State(r.varint()?)),
@@ -312,7 +317,7 @@ pub mod serializer {
     pub const HUMANOID_ARM: i32 = 42;
     pub const DYE_COLOR: i32 = 43;
 }
-fn read_value(kind: i32, r: &mut Reader) -> Result<Option<Value>> {
+pub(crate) fn read_value(kind: i32, r: &mut Reader) -> Result<Option<Value>> {
     use serializer::*;
     Ok(Some(match kind {
         BYTE => Value::Byte(r.i8()?),

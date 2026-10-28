@@ -76,6 +76,8 @@ pub enum Screen {
         /// Server Resource Packs (`acceptTextures`): Enabled, Disabled, or
         /// none for Prompt.
         packs: Option<bool>,
+        /// Horizon's protocol adapter for this saved server.
+        target_version: Option<String>,
     },
     Direct {
         address: String,
@@ -105,7 +107,10 @@ pub enum Screen {
 pub enum Outcome {
     None,
     Back,
-    Connect(String),
+    Connect {
+        address: String,
+        target_version: Option<String>,
+    },
 }
 /// A button: x, y, width, label, enabled, id.
 pub type ButtonSpec = (f32, f32, f32, String, bool, u8);
@@ -146,7 +151,8 @@ fn ping_all(servers: &[ServerEntry], pings: &Pings, icons: &Icons, file: &Path) 
         let _ = std::thread::Builder::new()
             .name("horizon-ping".into())
             .spawn(move || {
-                let result = match crate::net::ping(&address, Duration::from_secs(5)) {
+                let ping = crate::net::ping(&address, Duration::from_secs(5));
+                let result = match ping {
                     Ok((json, ms)) => {
                         let motd = crate::component::to_text(&json["description"], &mut |s| {
                             Text::literal(s)
@@ -483,11 +489,27 @@ impl Screen {
                     ),
                 ]
             }
-            Self::Edit { address, packs, .. } => vec![
+            Self::Edit {
+                address,
+                packs,
+                target_version,
+                ..
+            } => vec![
                 // ManageServerScreen's CycleButton, above Done.
                 b(
                     w / 2.0 - 100.0,
                     h / 4.0 + 72.0,
+                    200.0,
+                    &format!(
+                        "Server Version: {}",
+                        target_version.as_deref().unwrap_or("26.3")
+                    ),
+                    true,
+                    61,
+                ),
+                b(
+                    w / 2.0 - 100.0,
+                    h / 4.0 + 96.0,
                     200.0,
                     &pack_setting_label(*packs),
                     true,
@@ -495,7 +517,7 @@ impl Screen {
                 ),
                 b(
                     w / 2.0 - 100.0,
-                    h / 4.0 + 96.0 + 18.0,
+                    h / 4.0 + 120.0,
                     200.0,
                     &crate::lang::get_or("gui.done", "Done"),
                     servers::parse_address(address).is_some(),
@@ -503,7 +525,7 @@ impl Screen {
                 ),
                 b(
                     w / 2.0 - 100.0,
-                    h / 4.0 + 120.0 + 18.0,
+                    h / 4.0 + 144.0,
                     200.0,
                     &crate::lang::get_or("gui.cancel", "Cancel"),
                     true,
@@ -1021,7 +1043,12 @@ impl Screen {
                 Some(40),
             ) => {
                 if let Some(address) = selected.and_then(|i| entry_address(servers, lan, i)) {
-                    return Outcome::Connect(address);
+                    return Outcome::Connect {
+                        address,
+                        target_version: selected
+                            .and_then(|i| servers.get(i))
+                            .and_then(|s| s.target_version.clone()),
+                    };
                 }
             }
             (Self::List { .. }, Some(41)) => {
@@ -1037,6 +1064,7 @@ impl Screen {
                     address: String::new(),
                     focus: 1,
                     packs: None,
+                    target_version: None,
                 }
             }
             (
@@ -1053,6 +1081,7 @@ impl Screen {
                         address: s.ip,
                         focus: 0,
                         packs: s.accept_textures,
+                        target_version: s.target_version,
                     };
                 }
             }
@@ -1131,7 +1160,10 @@ impl Screen {
                     let (rx, ry) = ((x - left - 2.0).floor(), (y - row_top - 2.0).floor());
                     if over_right_half(rx, ry) {
                         *selected = Some(k);
-                        return Outcome::Connect(servers[k].ip.clone());
+                        return Outcome::Connect {
+                            address: servers[k].ip.clone(),
+                            target_version: servers[k].target_version.clone(),
+                        };
                     }
                     let to = if k > 0 && over_top_left(rx, ry) {
                         Some(k - 1)
@@ -1162,12 +1194,24 @@ impl Screen {
                     && let Some(address) = entry_address(servers, lan, index)
                 {
                     if *selected == Some(index) {
-                        return Outcome::Connect(address);
+                        return Outcome::Connect {
+                            address,
+                            target_version: servers
+                                .get(index)
+                                .and_then(|s| s.target_version.clone()),
+                        };
                     }
                     *selected = Some(index);
                 }
             }
             // CycleButton: Enabled, Disabled, Prompt, and round again.
+            (Self::Edit { target_version, .. }, Some(61)) => {
+                *target_version = if target_version.is_some() {
+                    None
+                } else {
+                    Some("26.2".into())
+                };
+            }
             (Self::Edit { packs, .. }, Some(60)) => {
                 *packs = match *packs {
                     Some(true) => Some(false),
@@ -1181,6 +1225,7 @@ impl Screen {
                     name,
                     address,
                     packs,
+                    target_version,
                     ..
                 },
                 Some(50),
@@ -1188,11 +1233,13 @@ impl Screen {
                 let mut list = servers::load(&servers_file(saves));
                 let mut entry = ServerEntry::new(name.trim(), address.trim());
                 entry.accept_textures = *packs;
+                entry.target_version = target_version.clone();
                 match index.and_then(|i| list.get_mut(i)) {
                     Some(e) => {
                         e.name = entry.name;
                         e.ip = entry.ip;
                         e.accept_textures = entry.accept_textures;
+                        e.target_version = entry.target_version;
                     }
                     None => list.push(entry),
                 }
@@ -1208,13 +1255,19 @@ impl Screen {
             ) => *self = Self::list(saves),
             (Self::Disconnected { retry, .. }, Some(55)) => *retry = None,
             (Self::Direct { address }, Some(52)) => {
-                return Outcome::Connect(direct_address(address));
+                return Outcome::Connect {
+                    address: direct_address(address),
+                    target_version: None,
+                };
             }
             (Self::Friend { code, relay, .. }, Some(56)) => {
                 if horizon_friends::invite::parse(code).is_some() {
                     crate::net::save_friends_relay(relay.trim());
                     let code: String = code.chars().filter(|c| !c.is_whitespace()).collect();
-                    return Outcome::Connect(format!("{}{code}", crate::net::FRIEND));
+                    return Outcome::Connect {
+                        address: format!("{}{code}", crate::net::FRIEND),
+                        target_version: None,
+                    };
                 }
             }
             (Self::Edit { .. } | Self::Friend { .. }, None) => {
@@ -1409,6 +1462,40 @@ pub fn wrap(text: &str, width: f32, atlas: &HudAtlas) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saved_server_version_is_used_when_joining() {
+        let dir = std::env::temp_dir().join(format!("horizon-mp-version-{}", std::process::id()));
+        let saves = dir.join("saves");
+        std::fs::create_dir_all(&saves).unwrap();
+        let mut screen = Screen::Edit {
+            index: None,
+            name: "Old server".into(),
+            address: "127.0.0.1:25565".into(),
+            focus: 0,
+            packs: None,
+            target_version: None,
+        };
+        let size = (427.0, 240.0);
+        screen.click(Some(61), 0.0, 0.0, size, &saves);
+        screen.click(Some(50), 0.0, 0.0, size, &saves);
+        assert_eq!(
+            servers::load(&servers_file(&saves))[0]
+                .target_version
+                .as_deref(),
+            Some("26.2")
+        );
+        let Screen::List { selected, .. } = &mut screen else {
+            panic!("expected server list");
+        };
+        *selected = Some(0);
+        assert!(matches!(
+            screen.click(Some(40), 0.0, 0.0, size, &saves),
+            Outcome::Connect { address, target_version: Some(version) }
+            if address == "127.0.0.1:25565" && version == "26.2"
+        ));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn direct_connection_joins_a_pasted_invite_and_keeps_host_names() {
@@ -1617,7 +1704,13 @@ mod tests {
         );
         // The right half joins at once.
         match screen.click(None, ix + 20.0, iy + 2.0 * ROW_HEIGHT + 10.0, size, &saves) {
-            Outcome::Connect(address) => assert_eq!(address, list[2].ip),
+            Outcome::Connect {
+                address,
+                target_version,
+            } => {
+                assert_eq!(address, list[2].ip);
+                assert_eq!(target_version, None);
+            }
             _ => panic!("the join arrow connects"),
         }
         let _ = std::fs::remove_dir_all(&dir);
@@ -1711,12 +1804,12 @@ mod tests {
                 .find(|b| b.5 == 60)
                 .map(|b| (b.0, b.1, b.2, b.3))
         };
-        // ManageServerScreen: 200 wide at height / 4 + 72, the saved value first.
+        // The version selector sits above resource packs in the edit screen.
         assert_eq!(
             cycle(&screen),
             Some((
                 113.5,
-                132.0,
+                156.0,
                 200.0,
                 "Server Resource Packs: Disabled".into()
             ))

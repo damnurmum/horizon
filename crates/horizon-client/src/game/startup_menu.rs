@@ -33,6 +33,7 @@ impl StartupMenu {
             Some(PendingWorldEntry::Server {
                 address: address.clone(),
                 name: options.player_name(),
+                target_version: options.target_version.clone(),
                 cookies: None,
             })
         } else {
@@ -123,9 +124,13 @@ impl StartupMenu {
                 creative,
                 create: Some(Box::new(options)),
             },
-            Action::Connect { address } => PendingWorldEntry::Server {
+            Action::Connect {
+                address,
+                target_version,
+            } => PendingWorldEntry::Server {
                 address,
                 name: player_name,
+                target_version,
                 cookies: None,
             },
             _ => return,
@@ -775,12 +780,13 @@ mod tests {
         menu.queue_entry(
             Action::Connect {
                 address: "localhost:25565".into(),
+                target_version: Some("26.2".into()),
             },
             "Guest".into(),
         );
         assert!(
-            matches!(menu.pending.take(), Some(PendingWorldEntry::Server { address, name, .. })
-            if address == "localhost:25565" && name == "Guest")
+            matches!(menu.pending.take(), Some(PendingWorldEntry::Server { address, name, target_version, .. })
+            if address == "localhost:25565" && name == "Guest" && target_version.as_deref() == Some("26.2"))
         );
         assert!(menu.pending.take().is_none(), "an entry is consumed once");
     }
