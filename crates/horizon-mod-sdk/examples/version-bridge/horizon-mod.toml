@@ -1,7 +1,7 @@
 id = "version_bridge"
-name = "Version Bridge 26.2"
+name = "Version Bridge 26.1/26.2"
 version = "0.1.0"
-description = "Translates Horizon's 26.3 packets for Java Edition 26.2 servers."
+description = "Experimental translation from Horizon 26.3 to Java Edition 26.1 and 26.2 servers."
 authors = ["Horizon contributors"]
 api = "0.1"
 capabilities = ["network"]

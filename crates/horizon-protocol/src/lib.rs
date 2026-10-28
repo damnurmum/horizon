@@ -9,17 +9,20 @@ pub mod crypto;
 pub mod entity_data;
 pub mod frame;
 pub mod ids;
+mod ids_26_1;
 mod ids_26_2;
 pub mod item;
 pub mod packets;
 pub mod quiet;
 pub mod registry;
+pub mod registry_26_1;
 pub mod registry_26_2;
 mod resolver;
 pub mod rsa;
 pub mod secure_chat;
 pub mod servers;
 pub mod text;
+pub mod translate_26_1;
 pub mod translate_26_2;
 
 /// SharedConstants.getProtocolVersion().

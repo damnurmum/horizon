@@ -102,7 +102,7 @@ direction on every call. A separate instance is made for each connection, and
 its `network_start(address, target_version)` selects whether it runs. A mod
 can emit up to 16 packets per input, each at most 8 MiB. Failure closes the
 connection with a diagnostic. Network mods do not get raw sockets or account
-tokens. See the `version-bridge` SDK example and [26.2 translation](translation-26-2.md).
+tokens. See the `version-bridge` SDK example and [26.1/26.2 translation](translation-26-2.md).
 
 | Hook (export) | When |
 |---|---|

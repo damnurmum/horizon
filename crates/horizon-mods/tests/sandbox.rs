@@ -144,17 +144,16 @@ fn network_mod_translates_a_handshake_in_its_own_instance() {
         buf::Reader,
         packets::handshake::{self, Serverbound},
     };
-    let mut mods = load("version_bridge.hmod");
+    let package = std::env::var_os("HORIZON_VERSION_BRIDGE_TEST_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| mods_dir().join("version_bridge.hmod"));
+    let mut mods = Mods::load(&[package], |_| true, |_| false);
     assert_eq!(mods.entries()[0].status, Status::Running);
     assert!(
         mods.network_translator("localhost:25565", None)
             .unwrap()
             .is_none()
     );
-    let translator = mods
-        .network_translator("localhost:25565", Some("26.2"))
-        .unwrap()
-        .expect("the mod selected 26.2");
     let original = Serverbound::Intention(handshake::Intention {
         protocol: horizon_protocol::PROTOCOL_VERSION,
         host: "localhost".into(),
@@ -162,17 +161,23 @@ fn network_mod_translates_a_handshake_in_its_own_instance() {
         intent: handshake::LOGIN,
     })
     .encode();
-    let packets = translator
-        .translate(State::Handshake, Direction::Serverbound, &original)
-        .unwrap();
-    assert_eq!(packets.len(), 1);
-    let mut reader = Reader::new(&packets[0]);
-    let id = reader.varint().unwrap();
-    let Serverbound::Intention(packet) = Serverbound::decode(id, reader.rest()).unwrap() else {
-        panic!("expected handshake");
-    };
-    assert_eq!(packet.protocol, 776);
-    assert_eq!(packet.host, "localhost");
+    for (version, protocol) in [("26.1", 775), ("26.2", 776)] {
+        let translator = mods
+            .network_translator("localhost:25565", Some(version))
+            .unwrap()
+            .unwrap_or_else(|| panic!("the mod did not select {version}"));
+        let packets = translator
+            .translate(State::Handshake, Direction::Serverbound, &original)
+            .unwrap();
+        assert_eq!(packets.len(), 1);
+        let mut reader = Reader::new(&packets[0]);
+        let id = reader.varint().unwrap();
+        let Serverbound::Intention(packet) = Serverbound::decode(id, reader.rest()).unwrap() else {
+            panic!("expected handshake");
+        };
+        assert_eq!(packet.protocol, protocol);
+        assert_eq!(packet.host, "localhost");
+    }
 }
 
 #[test]

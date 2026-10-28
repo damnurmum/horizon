@@ -1204,12 +1204,12 @@ impl Screen {
                     *selected = Some(index);
                 }
             }
-            // CycleButton: Enabled, Disabled, Prompt, and round again.
+            // CycleButton: current, 26.2, 26.1, and round again.
             (Self::Edit { target_version, .. }, Some(61)) => {
-                *target_version = if target_version.is_some() {
-                    None
-                } else {
-                    Some("26.2".into())
+                *target_version = match target_version.as_deref() {
+                    None => Some("26.2".into()),
+                    Some("26.2") => Some("26.1".into()),
+                    _ => None,
                 };
             }
             (Self::Edit { packs, .. }, Some(60)) => {
@@ -1478,12 +1478,16 @@ mod tests {
         };
         let size = (427.0, 240.0);
         screen.click(Some(61), 0.0, 0.0, size, &saves);
+        assert!(
+            matches!(&screen, Screen::Edit { target_version: Some(version), .. } if version == "26.2")
+        );
+        screen.click(Some(61), 0.0, 0.0, size, &saves);
         screen.click(Some(50), 0.0, 0.0, size, &saves);
         assert_eq!(
             servers::load(&servers_file(&saves))[0]
                 .target_version
                 .as_deref(),
-            Some("26.2")
+            Some("26.1")
         );
         let Screen::List { selected, .. } = &mut screen else {
             panic!("expected server list");
@@ -1492,7 +1496,7 @@ mod tests {
         assert!(matches!(
             screen.click(Some(40), 0.0, 0.0, size, &saves),
             Outcome::Connect { address, target_version: Some(version) }
-            if address == "127.0.0.1:25565" && version == "26.2"
+            if address == "127.0.0.1:25565" && version == "26.1"
         ));
         std::fs::remove_dir_all(dir).unwrap();
     }
