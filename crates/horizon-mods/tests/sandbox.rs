@@ -181,6 +181,24 @@ fn network_mod_translates_a_handshake_in_its_own_instance() {
 }
 
 #[test]
+fn version_bridge_rejects_unimplemented_and_non_release_targets() {
+    let package = std::env::var_os("HORIZON_VERSION_BRIDGE_TEST_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| mods_dir().join("version_bridge.hmod"));
+    for (version, expected) in [
+        ("1.20.6", "not supported yet"),
+        ("b1.8.1", "outside its scope"),
+    ] {
+        let mut mods = Mods::load(&[package.clone()], |_| true, |_| false);
+        let error = match mods.network_translator("localhost:25565", Some(version)) {
+            Err(error) => error,
+            Ok(_) => panic!("{version} was accepted"),
+        };
+        assert!(error.contains(expected), "{error}");
+    }
+}
+
+#[test]
 fn network_mod_translates_a_large_packet_with_bounded_fuel() {
     use horizon_protocol::{
         Direction, State,
