@@ -1177,6 +1177,27 @@ mod tests {
         let mut reader = Reader::new(&converted);
         assert_eq!(reader.i16().unwrap(), 2);
         assert_eq!(Slot::read(&mut reader).unwrap().unwrap().item, 72);
+
+        // Via's backwards data maps new items to older substitutes. Exercise
+        // both an explicit item override and a whole-word material fallback.
+        for (current_item, old_item) in [(212, 163), (72, 65)] {
+            let mut current = Writer::new();
+            current.i16(2);
+            Slot::write(&Some(Stack::new(current_item, 1)), &mut current);
+            let converted =
+                convert_item_packet(&current.data, "set_creative_mode_slot", false).unwrap();
+            let mut reader = Reader::new(&converted);
+            assert_eq!(reader.i16().unwrap(), 2);
+            assert_eq!(Slot::read(&mut reader).unwrap().unwrap().item, old_item);
+        }
+    }
+
+    #[test]
+    fn every_current_item_has_a_26_2_id_or_fallback() {
+        for current in 0..1658 {
+            let old = registry_26_2::item_to_old(current).expect("missing 26.2 item fallback");
+            assert!((0..1537).contains(&old));
+        }
     }
 
     #[test]

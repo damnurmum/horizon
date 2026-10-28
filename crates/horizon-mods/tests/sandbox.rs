@@ -209,8 +209,9 @@ fn network_mod_translates_a_large_packet_with_bounded_fuel() {
 fn version_bridge_drops_items_and_decodes_their_metadata() {
     use horizon_protocol::{
         Direction, State,
-        buf::{Reader, Writer},
+        buf::{Codec, Reader, Writer},
         entity_data::{Value, serializer},
+        item::{Slot, Stack},
         packets::play::{self, PlayerAction},
     };
     // A separate build lets local runs exercise a newly packaged mod without
@@ -239,6 +240,22 @@ fn version_bridge_drops_items_and_decodes_their_metadata() {
     let mut reader = Reader::new(&packets[0]);
     reader.varint().unwrap(); // 26.2 player_action packet ID
     assert_eq!(reader.varint().unwrap(), 4); // 26.2 DROP_ITEM
+
+    for (new_item, old_item) in [(212, 163), (72, 65)] {
+        let creative = play::Serverbound::SetCreativeModeSlot(play::SetCreativeModeSlot {
+            slot: 2,
+            item: Some(Stack::new(new_item, 1)),
+        })
+        .encode();
+        let packets = translator
+            .translate(State::Play, Direction::Serverbound, &creative)
+            .unwrap();
+        assert_eq!(packets.len(), 1);
+        let mut reader = Reader::new(&packets[0]);
+        reader.varint().unwrap(); // 26.2 set_creative_mode_slot packet ID
+        assert_eq!(reader.i16().unwrap(), 2);
+        assert_eq!(Slot::read(&mut reader).unwrap().unwrap().item, old_item);
+    }
 
     let mut old = Writer::new();
     old.varint(99); // 26.2 clientbound set_entity_data packet ID
