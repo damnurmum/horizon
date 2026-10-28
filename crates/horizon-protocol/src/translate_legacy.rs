@@ -9,6 +9,7 @@ use crate::{
     item::{Component, Slot, Stack, Template},
     packets::{
         handshake,
+        login,
         play::{Explode, SoundHolder},
     },
 };
@@ -46,6 +47,21 @@ impl PacketTranslator for Translator {
             old_packet_id(state, direction, name)
         };
         let (target_id, payload) = match (state, direction, name) {
+            (State::Login, Direction::Clientbound, "login_finished")
+                if !LOGIN_FINISHED_HAS_SESSION =>
+            {
+                let mut reader = Reader::new(payload);
+                login::GameProfile::read(&mut reader)?;
+                if reader.remaining() != 0 {
+                    return Err(Error::new(format!("{OLD_VERSION} login_finished has trailing bytes")));
+                }
+                let mut converted = payload.to_vec();
+                converted.extend_from_slice(&0_u128.to_be_bytes()); // session UUID absent in 26.1
+                (
+                    target_id.ok_or_else(|| Error::new("26.3 has no login_finished packet"))?,
+                    converted,
+                )
+            }
             (State::Play, Direction::Serverbound, "punch") => {
                 // 26.3's empty Punch replaces older version's hand-valued Swing.
                 if !payload.is_empty() {
@@ -96,7 +112,7 @@ impl PacketTranslator for Translator {
             ),
             (State::Play, Direction::Clientbound, "login") => (
                 target_id.ok_or_else(|| Error::new("26.3 has no play login packet"))?,
-                convert_spawn_info(payload, true)?,
+                convert_play_login(payload)?,
             ),
             (State::Play, Direction::Clientbound, "respawn") => (
                 target_id.ok_or_else(|| Error::new("26.3 has no respawn packet"))?,
@@ -222,6 +238,26 @@ impl PacketTranslator for Translator {
         writer.data.extend_from_slice(&payload);
         Ok(vec![writer.data])
     }
+}
+
+fn convert_play_login(payload: &[u8]) -> Result<Vec<u8>> {
+    let mut converted = convert_spawn_info(payload, true)?;
+    if !PLAY_LOGIN_HAS_ONLINE_MODE {
+        let secure_chat = converted
+            .pop()
+            .ok_or_else(|| Error::new(format!("{OLD_VERSION} play login is missing secure-chat flag")))?;
+        if secure_chat > 1 {
+            return Err(Error::new(format!("{OLD_VERSION} play login has an invalid secure-chat flag")));
+        }
+        converted.push(0); // 26.1 did not send the new online-mode field.
+        converted.push(secure_chat);
+        let mut reader = Reader::new(&converted);
+        crate::packets::play::Login::read(&mut reader)?;
+        if reader.remaining() != 0 {
+            return Err(Error::new(format!("{OLD_VERSION} play login has trailing bytes")));
+        }
+    }
+    Ok(converted)
 }
 
 fn old_packet_id(state: State, direction: Direction, name: &str) -> Option<i32> {

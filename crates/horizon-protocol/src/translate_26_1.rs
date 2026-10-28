@@ -5,6 +5,8 @@ pub const PROTOCOL_VERSION: i32 = 775;
 const OLD_VERSION: &str = "26.1";
 const BRICK_ITEM_ID: i32 = 1026;
 const SPECTATOR_ACTION_NAME: &str = "spectate_entity";
+const LOGIN_FINISHED_HAS_SESSION: bool = false;
+const PLAY_LOGIN_HAS_ONLINE_MODE: bool = false;
 
 include!("translate_legacy.rs");
 
@@ -34,6 +36,67 @@ mod tests {
         let mut reader = Reader::new(&packet);
         assert_eq!(reader.varint().unwrap(), 0);
         assert_eq!(reader.varint().unwrap(), PROTOCOL_VERSION);
+    }
+
+    #[test]
+    fn login_finished_adds_missing_session_uuid() {
+        let profile = crate::packets::login::GameProfile {
+            uuid: 42,
+            name: "elyapluggin".into(),
+            properties: Vec::new(),
+        };
+        let mut writer = Writer::new();
+        writer
+            .varint(ids_26_2::id(State::Login, Direction::Clientbound, "login_finished").unwrap());
+        crate::packets::login::GameProfile::write(&profile, &mut writer);
+        let converted = one(State::Login, Direction::Clientbound, &writer.data);
+        let mut reader = Reader::new(&converted);
+        let id = reader.varint().unwrap();
+        let crate::packets::login::Clientbound::LoginFinished(packet) =
+            crate::packets::login::Clientbound::decode(id, reader.rest()).unwrap()
+        else {
+            panic!("expected login_finished");
+        };
+        assert_eq!(packet.profile, profile);
+        assert_eq!(packet.session, 0);
+    }
+
+    #[test]
+    fn play_login_adds_missing_online_mode_flag() {
+        let mut old = Writer::new();
+        old.varint(ids_26_2::id(State::Play, Direction::Clientbound, "login").unwrap());
+        old.i32(42); // player id
+        old.bool(false); // hardcore
+        old.varint(1); // one dimension
+        old.string("minecraft:overworld");
+        for value in [2, 12, 8] {
+            old.varint(value);
+        }
+        for _ in 0..3 {
+            old.bool(false);
+        }
+        old.varint(0); // dimension type
+        old.string("minecraft:overworld");
+        old.i64(0); // seed
+        old.i8(0); // survival
+        old.i8(-1); // no previous mode
+        old.bool(false); // debug
+        old.bool(false); // flat
+        old.bool(false); // no last death
+        old.varint(0); // portal cooldown
+        old.varint(63); // sea level
+        old.bool(true); // enforces secure chat; no online mode field in 26.1
+        let converted = one(State::Play, Direction::Clientbound, &old.data);
+        let mut reader = Reader::new(&converted);
+        let id = reader.varint().unwrap();
+        let crate::packets::play::Clientbound::Login(packet) =
+            crate::packets::play::Clientbound::decode(id, reader.rest()).unwrap()
+        else {
+            panic!("expected play login");
+        };
+        assert_eq!(packet.player_id, 42);
+        assert!(!packet.online_mode);
+        assert!(packet.enforces_secure_chat);
     }
 
     #[test]

@@ -5,6 +5,8 @@ pub const PROTOCOL_VERSION: i32 = 776;
 const OLD_VERSION: &str = "26.2";
 const BRICK_ITEM_ID: i32 = 1054;
 const SPECTATOR_ACTION_NAME: &str = "spectator_action";
+const LOGIN_FINISHED_HAS_SESSION: bool = true;
+const PLAY_LOGIN_HAS_ONLINE_MODE: bool = true;
 
 include!("translate_legacy.rs");
 
