@@ -3128,7 +3128,15 @@ impl Game<'_> {
             })
             .map(|p| p.uuid)
             .collect();
-        Some((players, r.online_mode, upside_down))
+        // Vanilla omits Tab faces for offline-mode connections. Older-version
+        // bridge servers can still provide profile skins (or use the default
+        // skin for an unsigned player), so show the face column there too.
+        let show_heads = r.online_mode
+            || self
+                .active_target_version
+                .as_deref()
+                .is_some_and(|version| version != "26.3");
+        Some((players, show_heads, upside_down))
     }
     /// The signed-in account's `textures`, once the services answered.
     fn own_textures(&self) -> Option<horizon_client::skins::Textures> {
