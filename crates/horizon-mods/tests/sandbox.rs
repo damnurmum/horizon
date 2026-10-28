@@ -290,6 +290,80 @@ fn version_bridge_drops_items_and_decodes_their_metadata() {
     ));
 }
 
+#[test]
+fn version_bridge_26_1_drops_diamonds_and_decodes_the_item_entity() {
+    use horizon_protocol::{
+        Direction, State,
+        buf::{Codec, Reader, Writer},
+        entity_data::{Value, serializer},
+        item::{Slot, Stack},
+        packets::play::{self, PlayerAction},
+    };
+    let package = std::env::var_os("HORIZON_VERSION_BRIDGE_TEST_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| mods_dir().join("version_bridge.hmod"));
+    let mut mods = Mods::load(&[package], |_| true, |_| false);
+    assert_eq!(mods.entries()[0].status, Status::Running);
+    let translator = mods
+        .network_translator("localhost:25565", Some("26.1"))
+        .unwrap()
+        .expect("the mod selected 26.1");
+
+    let creative = play::Serverbound::SetCreativeModeSlot(play::SetCreativeModeSlot {
+        slot: 36,
+        item: Some(Stack::new(1012, 2)), // current diamond
+    })
+    .encode();
+    let packets = translator
+        .translate(State::Play, Direction::Serverbound, &creative)
+        .unwrap();
+    let mut reader = Reader::new(&packets[0]);
+    reader.varint().unwrap(); // set_creative_mode_slot
+    assert_eq!(reader.i16().unwrap(), 36);
+    let item = Slot::read(&mut reader).unwrap().unwrap();
+    assert_eq!((item.item, item.count), (899, 2)); // 26.1 diamond
+
+    let drop = play::Serverbound::PlayerAction(PlayerAction {
+        action: 5, // current DROP_ITEM
+        pos: [0; 3],
+        direction: 0,
+        sequence: 0,
+    })
+    .encode();
+    let packets = translator
+        .translate(State::Play, Direction::Serverbound, &drop)
+        .unwrap();
+    let mut reader = Reader::new(&packets[0]);
+    reader.varint().unwrap(); // player_action
+    assert_eq!(reader.varint().unwrap(), 4); // 26.1 DROP_ITEM
+
+    let mut old = Writer::new();
+    old.varint(99); // 26.1 set_entity_data
+    old.varint(123); // entity ID
+    old.u8(8); // ItemEntity.DATA_ITEM
+    old.varint(serializer::ITEM_STACK);
+    old.varint(1); // count
+    old.varint(899); // 26.1 diamond
+    old.varint(0); // added components
+    old.varint(0); // removed components
+    old.u8(0xff);
+    let packets = translator
+        .translate(State::Play, Direction::Clientbound, &old.data)
+        .unwrap();
+    let mut reader = Reader::new(&packets[0]);
+    let id = reader.varint().unwrap();
+    let play::Clientbound::SetEntityData(data) =
+        play::Clientbound::decode(id, reader.rest()).unwrap()
+    else {
+        panic!("expected dropped item metadata");
+    };
+    assert_eq!(data.id, 123);
+    assert!(matches!(
+        &data.values[..],
+        [(8, serializer::ITEM_STACK, Value::Item(Some(stack)))] if stack.item == 1012 && stack.count == 1
+    ));
+}
+
 fn player() -> Snapshot {
     Snapshot {
         player: Some(Player {
