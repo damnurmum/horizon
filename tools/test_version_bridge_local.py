@@ -206,7 +206,7 @@ def main():
         builder = ROOT / "target/debug/cargo-horizon-mod"
         subprocess.run(["cargo", "build", "-p", "cargo-horizon-mod"], cwd=ROOT, check=True)
         subprocess.run(
-            [str(builder), "build", "--debug"],
+            [str(builder), "build"],
             cwd=ROOT / "crates/horizon-mod-sdk/examples/version-bridge", check=True,
         )
         subprocess.run(

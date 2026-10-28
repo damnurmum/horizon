@@ -229,6 +229,74 @@ fn network_mod_translates_a_large_packet_with_bounded_fuel() {
 }
 
 #[test]
+fn version_bridge_translates_a_dense_chunk_with_bounded_fuel() {
+    use horizon_protocol::{
+        Direction, State,
+        buf::{Codec, Reader, Writer},
+        chunk::{BLOCKS, ChunkData, Layers, Paletted, Section, Strategy},
+    };
+    let package = std::env::var_os("HORIZON_VERSION_BRIDGE_TEST_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| mods_dir().join("version_bridge.hmod"));
+    let mut mods = Mods::load(&[package], |_| true, |_| false);
+    let translator = mods
+        .network_translator("localhost:25565", Some("26.2"))
+        .unwrap()
+        .unwrap();
+    let values = (0..BLOCKS).map(|i| (i % 32) as i32).collect::<Vec<_>>();
+    let dense = Section {
+        non_empty: BLOCKS as i16,
+        fluids: 0,
+        states: Paletted::from_values(&values, Strategy::Blocks, 15),
+        biomes: Paletted::from_values(&[0; 64], Strategy::Biomes, 7),
+    };
+    let empty = Section {
+        non_empty: 0,
+        fluids: 0,
+        states: Paletted::from_values(&[0; BLOCKS], Strategy::Blocks, 15),
+        biomes: Paletted::from_values(&[0; 64], Strategy::Biomes, 7),
+    };
+    let sections = (0..24)
+        .map(|i| if i < 16 { dense.clone() } else { empty.clone() })
+        .collect::<Vec<_>>();
+    let mut packet = Writer::new();
+    packet.varint(45); // 26.2 play clientbound level_chunk_with_light
+    packet.i32(2);
+    packet.i32(-3);
+    ChunkData::write(
+        &ChunkData {
+            heightmaps: vec![],
+            buffer: ChunkData::from_sections(&sections),
+            block_entities: vec![],
+        },
+        &mut packet,
+    );
+    for _ in 0..4 {
+        packet.long_array(&[]);
+    }
+    Layers::write(&Vec::new(), &mut packet);
+    Layers::write(&Vec::new(), &mut packet);
+    assert!(packet.data.len() > 40_000, "{} bytes", packet.data.len());
+    let output = translator
+        .translate(State::Play, Direction::Clientbound, &packet.data)
+        .unwrap();
+    assert_eq!(output.len(), 1);
+    let mut reader = Reader::new(&output[0]);
+    assert_eq!(
+        horizon_protocol::ids::name(
+            State::Play,
+            Direction::Clientbound,
+            reader.varint().unwrap()
+        ),
+        Some("level_chunk_with_light")
+    );
+    reader.i32().unwrap();
+    reader.i32().unwrap();
+    let chunk = ChunkData::read(&mut reader).unwrap();
+    assert_eq!(chunk.sections(24, 16, 7).unwrap().len(), 24);
+}
+
+#[test]
 fn version_bridge_drops_items_and_decodes_their_metadata() {
     use horizon_protocol::{
         Direction, State,
