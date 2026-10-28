@@ -58,8 +58,8 @@ pub struct StackData {
     pub stew_effects: Vec<(Arc<str>, i32)>,
     /// `minecraft:map_post_processing`: 0 lock, 1 scale.
     pub map_post_processing: Option<u8>,
-    /// Components Horizon does not model (lore, custom data, item name,
-    /// max stack size...), kept as their saved values in key order.
+    /// Components kept as their saved values in key order. This includes the
+    /// rich `custom_name` component alongside its plain gameplay name.
     pub other: Vec<(String, Tag)>,
 }
 /// A bundle's selected item index (-1: none). Like vanilla's
@@ -83,7 +83,6 @@ const MODELLED: &[&str] = &[
     "minecraft:bundle_contents",
     "minecraft:charged_projectiles",
     "minecraft:container",
-    "minecraft:custom_name",
     "minecraft:damage",
     "minecraft:dyed_color",
     "minecraft:enchantments",
@@ -106,18 +105,16 @@ impl StackData {
     pub fn other(&self, id: &str) -> Option<&Tag> {
         self.other.iter().find(|(k, _)| k == id).map(|(_, v)| v)
     }
-    /// `SetNameFunction.run`: a loot text component stored as `custom_name`
-    /// (plain text, as modelled) or as the unmodelled `item_name`.
+    /// `SetNameFunction.run`: keep a rich loot name alongside its plain text.
     pub fn set_loot_name(&mut self, id: &str, text: &serde_json::Value) {
         let tag = horizon_client_core::scoreboard::json_to_tag(text);
-        if id == "minecraft:custom_name" {
-            self.custom_name = read_text(&tag);
-        } else {
-            self.set_other(id, Some(tag));
-        }
+        self.set_other(id, Some(tag));
     }
-    /// Set (or with None remove) an unmodelled component.
+    /// Set (or with None remove) a preserved component value.
     pub fn set_other(&mut self, id: &str, value: Option<Tag>) {
+        if id == "minecraft:custom_name" {
+            self.custom_name = value.as_ref().and_then(read_text);
+        }
         self.other.retain(|(k, _)| k != id);
         if let Some(v) = value {
             self.other.push((id.to_owned(), v));
@@ -545,7 +542,12 @@ pub fn components_tag(damage: u32, data: Option<&StackData>) -> Option<Tag> {
             entries.push(("minecraft:repair_cost", Tag::Int(d.repair_cost as i32)));
         }
         if let Some(name) = &d.custom_name {
-            entries.push(("minecraft:custom_name", Tag::String(name.as_str().into())));
+            let saved = d
+                .other("minecraft:custom_name")
+                .filter(|tag| read_text(tag).as_deref() == Some(name.as_str()))
+                .cloned()
+                .unwrap_or_else(|| Tag::String(name.as_str().into()));
+            entries.push(("minecraft:custom_name", saved));
         }
         if let Some(potion) = &d.potion {
             entries.push((
@@ -723,6 +725,9 @@ pub fn components_tag(damage: u32, data: Option<&StackData>) -> Option<Tag> {
         .collect();
     if let Some(d) = data {
         for (k, v) in &d.other {
+            if k == "minecraft:custom_name" && d.custom_name.is_none() {
+                continue;
+            }
             out.entry(JavaString::from(k.as_str()))
                 .or_insert_with(|| v.clone());
         }
@@ -976,6 +981,45 @@ mod tests {
         assert_eq!(
             extra.and_then(|d| d.custom_name.clone()).as_deref(),
             Some("Games Right click")
+        );
+    }
+
+    #[test]
+    fn rich_custom_name_survives_component_round_trip() {
+        let name = Tag::compound([
+            ("text", Tag::String("".into())),
+            (
+                "extra",
+                Tag::List(vec![
+                    Tag::compound([
+                        ("text", Tag::String("A".into())),
+                        ("color", Tag::String("#ff0000".into())),
+                    ]),
+                    Tag::compound([
+                        ("text", Tag::String("B".into())),
+                        ("color", Tag::String("#0000ff".into())),
+                    ]),
+                ]),
+            ),
+        ]);
+        let components = Tag::compound([("minecraft:custom_name", name.clone())]);
+        let (_, extra) = decode_components(Some(&components));
+        let mut stack = ItemStack {
+            extra,
+            ..ItemStack::new("minecraft:stick", 1)
+        };
+        assert_eq!(stack.custom_name(), Some("AB"));
+        assert_eq!(
+            stack.data().unwrap().other("minecraft:custom_name"),
+            Some(&name)
+        );
+        assert_eq!(encode_components(&stack), Some(components));
+        stack.data_mut().custom_name = Some("Changed".into());
+        assert_eq!(
+            encode_components(&stack)
+                .unwrap()
+                .get("minecraft:custom_name"),
+            Some(&Tag::String("Changed".into()))
         );
     }
 

@@ -751,9 +751,66 @@ pub fn lore_texts(stack: &ItemStack) -> Vec<crate::text::Text> {
         .collect()
 }
 
+/// The hover name with the server's component spans intact. A custom name
+/// inherits italic unless a child explicitly sets `italic: false`.
+pub fn styled_name(stack: &ItemStack, fallback: &str) -> crate::text::Text {
+    if let Some(name) = stack.custom_name() {
+        let mut text = stack
+            .data()
+            .and_then(|d| d.other("minecraft:custom_name"))
+            .map(crate::entity_nbt::name_text)
+            .filter(|text| text.plain() == name)
+            .unwrap_or_else(|| crate::text::Text::literal(name));
+        let italic = crate::text::Style {
+            italic: Some(true),
+            ..Default::default()
+        };
+        for span in &mut text.spans {
+            span.style.inherit(&italic);
+        }
+        return text.resolve_legacy();
+    }
+    if let Some(name) = stack.data().and_then(|d| d.other("minecraft:item_name")) {
+        return crate::entity_nbt::name_text(name).resolve_legacy();
+    }
+    crate::text::Text::legacy(fallback)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn styled_name_keeps_gradient_spans_and_explicit_italic() {
+        let name = Tag::compound([
+            ("text", Tag::String("".into())),
+            (
+                "extra",
+                Tag::List(vec![
+                    Tag::compound([
+                        ("text", Tag::String("A".into())),
+                        ("color", Tag::String("#ff0000".into())),
+                        ("italic", Tag::Byte(0)),
+                    ]),
+                    Tag::compound([
+                        ("text", Tag::String("B".into())),
+                        ("color", Tag::String("#0000ff".into())),
+                    ]),
+                ]),
+            ),
+        ]);
+        let mut stack = ItemStack::new("minecraft:stick", 1);
+        stack.data_mut().custom_name = Some("AB".into());
+        stack
+            .data_mut()
+            .set_other("minecraft:custom_name", Some(name));
+        let text = styled_name(&stack, "unused");
+        assert_eq!(text.plain(), "AB");
+        assert_eq!(text.spans[0].style.color, Some(0xff0000));
+        assert_eq!(text.spans[1].style.color, Some(0x0000ff));
+        assert!(!text.spans[0].style.is_italic());
+        assert!(text.spans[1].style.is_italic());
+    }
 
     #[test]
     fn lore_keeps_component_colours_under_dark_purple_italic() {
