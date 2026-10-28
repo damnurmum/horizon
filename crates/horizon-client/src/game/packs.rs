@@ -218,6 +218,9 @@ impl Game<'_> {
         let context = pack.context.clone();
         self.pack = pack;
         self.gui = gui;
+        // Skin aliases and their slots belong to the previous atlas. Queue
+        // cached skins for upload again when the next player list is drawn.
+        self.skin_slots.clear();
         // The atlas's sprites moved: the particle engine re-reads every rect
         // and the packs' sprite sets, or every particle draws a stale region.
         self.particles

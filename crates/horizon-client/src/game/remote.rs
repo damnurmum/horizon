@@ -3112,7 +3112,11 @@ impl Game<'_> {
             p.skin = self
                 .remote
                 .as_ref()
-                .and_then(|r| r.skins.get(&p.uuid).cloned())
+                .and_then(|r| r.skins.get(&p.uuid))
+                // The download can be marked ready one frame before its
+                // atlas upload. Draw the UUID's default face until then.
+                .filter(|skin| self.gui.atlas.sprites.contains_key(*skin))
+                .cloned()
                 .unwrap_or_else(|| horizon_client::tab_list::default_skin(p.uuid).to_owned());
         }
         let r = self.remote.as_ref()?;
@@ -3296,7 +3300,9 @@ impl Game<'_> {
     pub(super) fn store_skin(&mut self, location: String, rgba: Vec<u8>) {
         use horizon_client::hud::SKIN_SLOTS;
         let slot = if self.skin_slots.len() < SKIN_SLOTS {
-            self.skin_slots.len()
+            (0..SKIN_SLOTS)
+                .find(|slot| !self.skin_slots.iter().any(|entry| entry.1 == *slot))
+                .expect("a free skin slot must exist")
         } else {
             let (old, slot) = self.skin_slots.remove(0);
             self.gui.atlas.sprites.remove(&old);
@@ -3327,6 +3333,10 @@ impl Game<'_> {
         let Some(i) = self.skin_slots.iter().position(|e| e.0 == location) else {
             return false;
         };
+        if !self.gui.atlas.sprites.contains_key(location) {
+            self.skin_slots.remove(i);
+            return false;
+        }
         let e = self.skin_slots.remove(i);
         self.skin_slots.push(e);
         true
