@@ -94,6 +94,8 @@ pub struct Session {
     pub address: String,
     pub name: String,
     pub counters: Arc<Mutex<Option<Arc<Counters>>>>,
+    /// First outbound error, retained for the receive thread's disconnect event.
+    send_error: Arc<Mutex<Option<String>>>,
     /// The cookies this server stored on us (`ClientboundStoreCookiePacket`).
     pub cookies: Cookies,
     /// HORIZON_NET_DEBUG=1 logs every packet sent from the game thread.
@@ -206,6 +208,7 @@ impl Session {
         let writer = Arc::new(Mutex::new(None));
         let configuring = Arc::new(AtomicBool::new(true));
         let counters = Arc::new(Mutex::new(None));
+        let send_error = Arc::new(Mutex::new(None));
         // Connection.initiateServerboundPlayConnection: a transfer's
         // handshake says so (ClientIntent.TRANSFER).
         let transferred = cookies.is_some();
@@ -213,6 +216,7 @@ impl Session {
         let (thread_writer, thread_counters, thread_cookies) =
             (writer.clone(), counters.clone(), cookies.clone());
         let thread_configuring = configuring.clone();
+        let thread_send_error = send_error.clone();
         let (address_owned, name_owned) = (address.to_owned(), name.to_owned());
         let thread = std::thread::Builder::new()
             .name("horizon-net".into())
@@ -232,8 +236,9 @@ impl Session {
                     transferred,
                     translator,
                 );
-                let from_server = result.is_ok();
-                let reason = result.unwrap_or_else(|e| e);
+                let outbound_error = thread_send_error.lock().unwrap().take();
+                let from_server = result.is_ok() && outbound_error.is_none();
+                let reason = outbound_error.unwrap_or_else(|| result.unwrap_or_else(|e| e));
                 if let Some(w) = thread_writer.lock().unwrap().take() {
                     w.shutdown();
                 }
@@ -252,6 +257,7 @@ impl Session {
             address: address.to_owned(),
             name: name.to_owned(),
             counters,
+            send_error,
             cookies,
             debug,
         }
@@ -281,10 +287,8 @@ impl Session {
         if self.configuring.load(Ordering::Relaxed) {
             return;
         }
-        if let Some(w) = writer.as_mut()
-            && w.send(&packet.encode()).is_err()
-        {
-            w.shutdown();
+        if let Some(w) = writer.as_mut() {
+            self.send_or_disconnect(w, &packet.encode());
         }
     }
     /// ServerboundResourcePackPacket, in whichever phase the connection is.
@@ -296,10 +300,8 @@ impl Session {
         } else {
             play::Serverbound::ResourcePack(status).encode()
         };
-        if let Some(w) = writer.as_mut()
-            && w.send(&body).is_err()
-        {
-            w.shutdown();
+        if let Some(w) = writer.as_mut() {
+            self.send_or_disconnect(w, &body);
         }
     }
     /// ServerboundCustomClickActionPacket (a dialog's answer), in whichever
@@ -315,20 +317,24 @@ impl Session {
         } else {
             play::Serverbound::CustomClickAction(click).encode()
         };
-        if let Some(w) = writer.as_mut()
-            && w.send(&body).is_err()
-        {
-            w.shutdown();
+        if let Some(w) = writer.as_mut() {
+            self.send_or_disconnect(w, &body);
         }
     }
     /// ServerboundAcceptCodeOfConductPacket, sent in configuration.
     pub fn accept_code_of_conduct(&self) {
         let mut writer = self.writer.lock().unwrap();
-        if let Some(w) = writer.as_mut()
-            && w.send(&cfg::Serverbound::AcceptCodeOfConduct(Empty).encode())
-                .is_err()
-        {
-            w.shutdown();
+        if let Some(w) = writer.as_mut() {
+            self.send_or_disconnect(w, &cfg::Serverbound::AcceptCodeOfConduct(Empty).encode());
+        }
+    }
+    fn send_or_disconnect(&self, writer: &mut ConnWriter, body: &[u8]) {
+        if let Err(err) = writer.send(body) {
+            self.send_error
+                .lock()
+                .unwrap()
+                .get_or_insert_with(|| err.to_string());
+            writer.shutdown();
         }
     }
     /// `Connection.disconnect`: the socket closes and the game goes on at once.
@@ -610,13 +616,14 @@ fn receive_play(
                 continue;
             }
         };
-        let reply = |p: play::Serverbound| {
-            if let Some(w) = shared_writer.lock().unwrap().as_mut() {
-                let _ = w.send(&p.encode());
+        let reply = |p: play::Serverbound| -> Result<(), String> {
+            match shared_writer.lock().unwrap().as_mut() {
+                Some(w) => w.send(&p.encode()).map_err(|e| e.to_string()),
+                None => Err("Disconnected".into()),
             }
         };
         match packet {
-            play::Clientbound::KeepAlive(k) => reply(play::Serverbound::KeepAlive(k)),
+            play::Clientbound::KeepAlive(k) => reply(play::Serverbound::KeepAlive(k))?,
             play::Clientbound::BundleDelimiter(_) => {}
             play::Clientbound::ResourcePackPush(p) => {
                 let _ = send.send(Event::PackPush(p));
@@ -625,10 +632,8 @@ fn receive_play(
                 let _ = send.send(Event::PackPop(p.id));
             }
             play::Clientbound::StartConfiguration(_) => {
-                if let Some(w) = shared_writer.lock().unwrap().as_mut() {
-                    let _ = w.send(&play::Serverbound::ConfigurationAcknowledged(Empty).encode());
-                    configuring.store(true, Ordering::Relaxed);
-                }
+                reply(play::Serverbound::ConfigurationAcknowledged(Empty))?;
+                configuring.store(true, Ordering::Relaxed);
                 reader.set_packet_state(State::Configuration);
                 let registries =
                     configure(reader, shared_writer, configuring, lang, send, cookies)?;
@@ -641,7 +646,7 @@ fn receive_play(
                 reply(play::Serverbound::CookieResponse(cfg::CookieResponse {
                     key: q.key,
                     payload,
-                }));
+                }))?;
             }
             play::Clientbound::StoreCookie(p) => {
                 cookies.lock().unwrap().insert(p.key, p.payload);
@@ -884,6 +889,79 @@ fn ping_with_translator(
 mod tests {
     use super::*;
 
+    struct RejectKeepAlive;
+    impl PacketTranslator for RejectKeepAlive {
+        fn translate(
+            &self,
+            state: State,
+            direction: horizon_protocol::Direction,
+            body: &[u8],
+        ) -> horizon_protocol::Result<Vec<Vec<u8>>> {
+            if state == State::Play
+                && direction == horizon_protocol::Direction::Serverbound
+                && body == play::Serverbound::KeepAlive(cfg::KeepAlive { id: 9 }).encode()
+            {
+                return Err(horizon_protocol::Error::new(
+                    "keep-alive translation failed",
+                ));
+            }
+            Ok(vec![body.to_vec()])
+        }
+    }
+
+    #[test]
+    fn automatic_reply_propagates_translation_failure() {
+        let (client, server) = horizon_protocol::connection::Pipe::pair();
+        let mut client = Connection::local(client);
+        client.set_translator(Arc::new(RejectKeepAlive));
+        client.set_packet_state(State::Play);
+        let (mut reader, writer) = client.split();
+        let writer = Mutex::new(Some(writer));
+        let (send, _events) = channel();
+        let mut server = Connection::local(server);
+        server
+            .send(&play::Clientbound::KeepAlive(cfg::KeepAlive { id: 9 }).encode())
+            .unwrap();
+        assert_eq!(
+            receive_play(
+                &mut reader,
+                &writer,
+                &AtomicBool::new(false),
+                &Language::new(),
+                &send,
+                &Cookies::default(),
+            ),
+            Err("keep-alive translation failed".into())
+        );
+    }
+
+    #[test]
+    fn game_thread_send_retains_translation_failure() {
+        let (client, _server) = horizon_protocol::connection::Pipe::pair();
+        let mut client = Connection::local(client);
+        client.set_translator(Arc::new(RejectKeepAlive));
+        client.set_packet_state(State::Play);
+        let (_reader, writer) = client.split();
+        let (_send, events) = channel();
+        let session = Session {
+            events,
+            writer: Arc::new(Mutex::new(Some(writer))),
+            configuring: Arc::new(AtomicBool::new(false)),
+            thread: None,
+            address: "local".into(),
+            name: "Player".into(),
+            counters: Arc::new(Mutex::new(None)),
+            send_error: Arc::new(Mutex::new(None)),
+            cookies: Cookies::default(),
+            debug: false,
+        };
+        session.send(play::Serverbound::KeepAlive(cfg::KeepAlive { id: 9 }));
+        assert_eq!(
+            session.send_error.lock().unwrap().as_deref(),
+            Some("keep-alive translation failed")
+        );
+    }
+
     #[test]
     fn translated_status_ping_uses_handshake_then_status_phase() {
         use horizon_protocol::{Direction, packets::status};
@@ -1012,6 +1090,7 @@ mod tests {
             address: "local".into(),
             name: "Player".into(),
             counters: Arc::new(Mutex::new(None)),
+            send_error: Arc::new(Mutex::new(None)),
             cookies: Cookies::default(),
             debug: false,
         };
