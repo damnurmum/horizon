@@ -632,8 +632,13 @@ fn receive_play(
                 let _ = send.send(Event::PackPop(p.id));
             }
             play::Clientbound::StartConfiguration(_) => {
-                reply(play::Serverbound::ConfigurationAcknowledged(Empty))?;
-                configuring.store(true, Ordering::Relaxed);
+                {
+                    let mut writer = shared_writer.lock().unwrap();
+                    let w = writer.as_mut().ok_or("Disconnected")?;
+                    w.send(&play::Serverbound::ConfigurationAcknowledged(Empty).encode())
+                        .map_err(|e| e.to_string())?;
+                    configuring.store(true, Ordering::Relaxed);
+                }
                 reader.set_packet_state(State::Configuration);
                 let registries =
                     configure(reader, shared_writer, configuring, lang, send, cookies)?;
